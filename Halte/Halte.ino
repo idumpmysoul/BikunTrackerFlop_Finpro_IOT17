@@ -38,7 +38,7 @@
 // ==========================
 #define MY_HALTE_ID   "FT"          // Which halte this device represents
 String MY_HALTE_TYPE  = "DEDICATED"; // "DEDICATED" or "SHARED"
-String RELEVANT_LINE  = "RED";       // "RED", "BLUE", or "BOTH"
+String RELEVANT_LINE  = "BLUE";       // "RED", "BLUE", or "BOTH"
 
 // WiFi hotspot credentials
 const char* WIFI_SSID = "OrganicTrash";
@@ -133,34 +133,31 @@ String checkRelation(int busIndex, int halteIndex) {
 // ==========================
 void displayStatus() {
   lcd.clear();
+  Serial.println("[LCD] --- Update Display ---");
 
   bool showRed = (RELEVANT_LINE == "RED" || RELEVANT_LINE == "BOTH");
   bool showBlue = (RELEVANT_LINE == "BLUE" || RELEVANT_LINE == "BOTH");
 
   // Jika tidak ada data sama sekali, tampilkan pesan tunggu
   if (redBus.lastUpdateTime == 0 && blueBus.lastUpdateTime == 0) {
-    lcd.setCursor(0, 0); lcd.print("Halte: "); lcd.print(MY_HALTE_ID);
-    lcd.setCursor(0, 1); lcd.print("Menunggu data...");
+    lcdPrint(0, 0, "Halte: " + String(MY_HALTE_ID));
+    lcdPrint(0, 1, "Menunggu data...");
     return;
   }
 
   if (showRed) {
-    lcd.setCursor(0, 0);
-    lcd.print("M: ");
-    if (redBus.lastUpdateTime != 0 && millis() - redBus.lastUpdateTime > BUS_TIMEOUT_MS) {
-      lcd.print("Sinyal Hilang");
+    if (millis() - redBus.lastUpdateTime > BUS_TIMEOUT_MS) {
+      lcdPrint(0, 0, "M:Sinyal Hilang ");
     } else {
-      lcd.print(redBus.currentZone);
+      lcdPrint(0, 0, "M:" + redBus.currentZone + "      ");
     }
   }
 
   if (showBlue) {
-    lcd.setCursor(0, 1);
-    lcd.print("B: ");
-    if (blueBus.lastUpdateTime != 0 && millis() - blueBus.lastUpdateTime > BUS_TIMEOUT_MS) {
-      lcd.print("Sinyal Hilang");
+    if (millis() - blueBus.lastUpdateTime > BUS_TIMEOUT_MS) {
+      lcdPrint(0, 1, "B:Sinyal Hilang ");
     } else {
-      lcd.print(blueBus.currentZone);
+      lcdPrint(0, 1, "B:" + blueBus.currentZone + "      ");
     }
   }
 }
@@ -168,8 +165,6 @@ void displayStatus() {
 // ==========================
 // MQTT Callback
 // ==========================
-WiFiClient client;
-PubSubClient mqtt(client);
 
 void mqttCallback(char* topic, byte* payload, unsigned int length) {
   StaticJsonDocument<256> doc;
@@ -226,24 +221,39 @@ void connectWiFi() {
 }
 
 void connectMQTT() {
-  mqtt.setServer(MQTT_HOST, MQTT_PORT);
-  mqtt.setCallback(mqttCallback);
-  while (!mqtt.connected()) {
-    mqtt.connect("HalteClient");
+  mqttClient.setServer(MQTT_HOST, MQTT_PORT);
+  mqttClient.setCallback(mqttCallback);
+  while (!mqttClient.connected()) {
+    Serial.print(".");
+    mqttClient.connect("HalteClient");
     delay(400);
   }
-  mqtt.subscribe(MQTT_TOPIC);
+  mqttClient.subscribe(MQTT_TOPIC);
   Serial.println("MQTT Connected!");
 }
+
+// ==========================
+// Debug to serial
+// ==========================
+void lcdPrint(int col, int row, const String &text) {
+  lcd.setCursor(col, row);
+  lcd.print(text);
+
+  // Debug: mirror to Serial
+  Serial.printf("[LCD] (%d,%d) %s\n", col, row, text.c_str());
+}
+
 
 // ==========================
 // Main Loop
 // ==========================
 void setup() {
   Serial.begin(115200);
+  delay(3000);
 
-  lcd.begin(16, 2);
+  lcd.init();
   lcd.backlight();
+
   lcd.clear();
   lcd.setCursor(0, 0); lcd.print("Booting Halte...");
   lcd.setCursor(0, 1); lcd.print(MY_HALTE_ID);

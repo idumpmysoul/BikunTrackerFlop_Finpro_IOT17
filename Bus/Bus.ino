@@ -69,7 +69,7 @@ const int PIN_LED_BLUE = 26;  // BLUE line LED
 const uint32_t BUTTON_DEBOUNCE_MS  = 50;
 const uint32_t PUBLISH_INTERVAL_MS = 2000; // send MQTT every 1s
 
-const uint32_t SIMULATION_MOVE_INTERVAL_MS = 5000; // Bus "pindah" setiap 5 detik di mode simulasi
+const uint32_t SIMULATION_MOVE_INTERVAL_MS = 15000; // Bus "pindah" setiap 5 detik di mode simulasi
 
 Preferences preferences;
 
