@@ -41,27 +41,46 @@ String MY_HALTE_TYPE  = "DEDICATED"; // "DEDICATED" or "SHARED"
 String RELEVANT_LINE  = "RED";       // "RED", "BLUE", or "BOTH"
 
 // WiFi hotspot credentials
-const char* WIFI_SSID = "YOUR_SSID";
-const char* WIFI_PASS = "YOUR_PASSWORD";
+const char* WIFI_SSID = "OrganicTrash";
+const char* WIFI_PASS = "oops1112";
 
 // MQTT broker
 const char* MQTT_HOST = "broker.hivemq.com";
 const uint16_t MQTT_PORT = 1883;
-const char* MQTT_TOPIC = "campusbus/location";
+//const char* MQTT_TOPIC = "campusbus/location";
+const char* MQTT_TOPIC = "bikun/location"; // Sesuaikan dengan topik bus
 
 // ==========================
 // LCD Setup
 // ==========================
 LiquidCrystal_I2C lcd(0x27, 16, 2);
+WiFiClient wifiClient;
+PubSubClient mqttClient(wifiClient);
 
 // ==========================
 // Route Data
 // ==========================
-const char* redRoute[] = {"STASIUN", "ASRAMA", "FT", "FE", "FIB", "STASIUN"};
-const int NUM_RED = 6;
+struct Zone { const char* name; double lat; double lon; };
 
-const char* blueRoute[] = {"STASIUN", "ASRAMA", "FISIP", "FH", "FPsi", "STASIUN"};
-const int NUM_BLUE = 6;
+const Zone redRoute[] = {
+  {"ASRAMA",-6.348191,106.829705}, {"MENWA",-6.353438,106.831816},
+  {"STASIUN",-6.360717,106.831752}, {"FH",-6.364840,106.832226},
+  {"BALAIRUNG",-6.368286,106.831712}, {"RIK",-6.370153,106.831040},
+  {"FKM",-6.371713,106.829113}, {"FMIPA",-6.369845,106.825761},
+  {"FT",-6.361060,106.823179}, {"FEB",-6.359419,106.825684},
+  {"FISIP",-6.361711,106.830344}, {"STASIUN",-6.360717,106.831752},
+  {"MENWA",-6.353438,106.831816}
+};
+const int NUM_RED_ZONES = sizeof(redRoute) / sizeof(redRoute[0]);
+
+const Zone blueRoute[] = {
+  {"ASRAMA",-6.348191,106.829705}, {"MENWA",-6.353438,106.831816},
+  {"STASIUN",-6.360778,106.831417}, {"FIB",-6.360887,106.829157},
+  {"FEB",-6.359658,106.825722}, {"FT",-6.361258,106.823307},
+  {"STASIUN",-6.360778,106.831417}, {"MENWA",-6.353438,106.831816}
+};
+const int NUM_BLUE_ZONES = sizeof(blueRoute) / sizeof(blueRoute[0]);
+
 
 // ==========================
 // Bus State Object
@@ -69,23 +88,38 @@ const int NUM_BLUE = 6;
 struct BusState {
   String bus_id = "";
   String line = "";
-  String zone = "UNKNOWN";
-  int zoneIndex = -1;
-  String relation = "Unknown"; // "Approaching", "Passed", "Arrived"
+  String currentZone = "---";
+  int lastKnownIndex = -1;
+  unsigned long lastUpdateTime = 0; // [BARU] Untuk timeout
 };
 
 BusState redBus;
 BusState blueBus;
 
+const unsigned long BUS_TIMEOUT_MS = 30000; // 30 detik
+
 // ==========================
 // Utilities
 // ==========================
-int findIndexInRoute(const char* target, const char** route, int count) {
-  for (int i = 0; i < count; i++) {
-    if (strcmp(target, route[i]) == 0) return i;
+int findNextInstanceOfZone(const char* targetZone, const Zone* route, int routeSize, int startIndex) {
+  // Jika ini pencarian pertama, cari di seluruh array
+  if (startIndex <= 0) {
+    for (int i = 0; i < routeSize; i++) {
+      if (strcmp(route[i].name, targetZone) == 0) return i;
+    }
+  } else { // Jika tidak, lanjutkan pencarian dari posisi terakhir
+    // Cari dari titik awal ke depan
+    for (int i = startIndex; i < routeSize; i++) {
+      if (strcmp(route[i].name, targetZone) == 0) return i;
+    }
+    // Jika tidak ketemu, cari dari awal (loop back)
+    for (int i = 0; i < startIndex; i++) {
+      if (strcmp(route[i].name, targetZone) == 0) return i;
+    }
   }
-  return -1;
+  return -1; // Tidak ditemukan
 }
+
 
 String checkRelation(int busIndex, int halteIndex) {
   if (busIndex == -1) return "Unknown";
@@ -103,23 +137,31 @@ void displayStatus() {
   bool showRed = (RELEVANT_LINE == "RED" || RELEVANT_LINE == "BOTH");
   bool showBlue = (RELEVANT_LINE == "BLUE" || RELEVANT_LINE == "BOTH");
 
-  BusState* primary = nullptr;
-  BusState* secondary = nullptr;
+  // Jika tidak ada data sama sekali, tampilkan pesan tunggu
+  if (redBus.lastUpdateTime == 0 && blueBus.lastUpdateTime == 0) {
+    lcd.setCursor(0, 0); lcd.print("Halte: "); lcd.print(MY_HALTE_ID);
+    lcd.setCursor(0, 1); lcd.print("Menunggu data...");
+    return;
+  }
 
-  if (showRed && redBus.bus_id != "") primary = &redBus;
-  if (!primary && showBlue && blueBus.bus_id != "") primary = &blueBus;
+  if (showRed) {
+    lcd.setCursor(0, 0);
+    lcd.print("M: ");
+    if (redBus.lastUpdateTime != 0 && millis() - redBus.lastUpdateTime > BUS_TIMEOUT_MS) {
+      lcd.print("Sinyal Hilang");
+    } else {
+      lcd.print(redBus.currentZone);
+    }
+  }
 
-  if (primary) {
-    lcd.setCursor(0, 0);
-    lcd.print(primary->line.substring(0,1)); lcd.print(": ");
-    lcd.print(primary->bus_id);
+  if (showBlue) {
     lcd.setCursor(0, 1);
-    lcd.print(primary->relation);
-  } else {
-    lcd.setCursor(0, 0);
-    lcd.print("Waiting for Bus");
-    lcd.setCursor(0, 1);
-    lcd.print(MY_HALTE_ID);
+    lcd.print("B: ");
+    if (blueBus.lastUpdateTime != 0 && millis() - blueBus.lastUpdateTime > BUS_TIMEOUT_MS) {
+      lcd.print("Sinyal Hilang");
+    } else {
+      lcd.print(blueBus.currentZone);
+    }
   }
 }
 
@@ -130,40 +172,43 @@ WiFiClient client;
 PubSubClient mqtt(client);
 
 void mqttCallback(char* topic, byte* payload, unsigned int length) {
-  String data = "";
-  for (int i = 0; i < length; i++) data += (char)payload[i];
-
-  Serial.println("MQTT IN: " + data);
-
   StaticJsonDocument<256> doc;
-  if (deserializeJson(doc, data)) return;
+  deserializeJson(doc, payload, length);
 
-  String bus_id = doc["bus_id"];
-  String line = doc["line_id"];
-  const char* zone = doc["current_zone"];
+  String line_id = doc["line_id"];
+  const char* current_zone = doc["current_zone"];
 
-  BusState* bus = nullptr;
-  int halteIndex = -1;
+  BusState* busToUpdate = nullptr;
+  const Zone* route = nullptr;
+  int routeSize = 0;
 
-  if (line == "RED" && (RELEVANT_LINE == "RED" || RELEVANT_LINE == "BOTH")) {
-    bus = &redBus;
-    halteIndex = findIndexInRoute(MY_HALTE_ID, redRoute, NUM_RED);
-    bus->zoneIndex = findIndexInRoute(zone, redRoute, NUM_RED);
+  // Filter dan pilih bus yang akan diupdate
+  if (line_id == "RED" && (RELEVANT_LINE == "RED" || RELEVANT_LINE == "BOTH")) {
+    busToUpdate = &redBus;
+    route = redRoute;
+    routeSize = NUM_RED_ZONES;
+  } else if (line_id == "BLUE" && (RELEVANT_LINE == "BLUE" || RELEVANT_LINE == "BOTH")) {
+    busToUpdate = &blueBus;
+    route = blueRoute;
+    routeSize = NUM_BLUE_ZONES;
+  } else {
+    return; // Pesan tidak relevan untuk halte ini, abaikan
   }
-  else if (line == "BLUE" && (RELEVANT_LINE == "BLUE" || RELEVANT_LINE == "BOTH")) {
-    bus = &blueBus;
-    halteIndex = findIndexInRoute(MY_HALTE_ID, blueRoute, NUM_BLUE);
-    bus->zoneIndex = findIndexInRoute(zone, blueRoute, NUM_BLUE);
-  }
-  else {
-    return;  // irrelevant message
-  }
 
-  bus->bus_id = bus_id;
-  bus->line = line;
-  bus->zone = zone;
-  bus->relation = checkRelation(bus->zoneIndex, halteIndex);
+  // Lakukan pencarian cerdas
+  int newIndex = findNextInstanceOfZone(current_zone, route, routeSize, busToUpdate->lastKnownIndex + 1);
+  
+  if (newIndex != -1) {
+    busToUpdate->lastKnownIndex = newIndex;
+  }
+  
+  // Update data bus
+  busToUpdate->bus_id = doc["bus_id"].as<String>();
+  busToUpdate->line = line_id;
+  busToUpdate->currentZone = current_zone;
+  busToUpdate->lastUpdateTime = millis();
 
+  // Panggil fungsi display untuk memperbarui LCD
   displayStatus();
 }
 
@@ -199,17 +244,28 @@ void setup() {
 
   lcd.begin(16, 2);
   lcd.backlight();
-
+  lcd.clear();
+  lcd.setCursor(0, 0); lcd.print("Booting Halte...");
+  lcd.setCursor(0, 1); lcd.print(MY_HALTE_ID);
+  
   connectWiFi();
   connectMQTT();
-
-  lcd.setCursor(0,0); lcd.print("Halte Active:");
-  lcd.setCursor(0,1); lcd.print(MY_HALTE_ID);
-  delay(1500);
+  
   lcd.clear();
+  lcd.setCursor(0, 0); lcd.print("Sistem Online");
+  delay(2000);
+  displayStatus();
 }
 
+unsigned long lastDisplayUpdate = 0;
+
 void loop() {
-  if (!mqtt.connected()) connectMQTT();
-  mqtt.loop();
+  if (!mqttClient.connected()) connectMQTT();
+  mqttClient.loop();
+
+  // Periksa timeout bus dan perbarui display setiap 5 detik
+  if (millis() - lastDisplayUpdate > 5000) {
+    lastDisplayUpdate = millis();
+    displayStatus();
+  }
 }
