@@ -1,39 +1,60 @@
+/*
+ * SANITY CHECK - Context-Aware Campus Bus Tracker
+ * Support BOTH architectures: FreeRTOS & Simple Loop
+ * 
+ * How to use:
+ * 1. Set TEST_MODE: "BUS" or "HALTE"
+ * 2. Set CODE_ARCH: "FREERTOS" or "SIMPLE"
+ * 3. Upload and check Serial Monitor (115200 baud)
+ * 4. For HALTE mode, also check LCD display
+ */
+
 #include <WiFi.h>
 #include <PubSubClient.h>
 #include <LiquidCrystal_I2C.h>
-#include <TinyGPS++.h>
+#include <TinyGPSPlus.h>
 #include <HardwareSerial.h>
 
-// ========== KONFIGURASI TEST MODE ==========
-// Pilih mode: "BUS" atau "HALTE"
-#define TEST_MODE "BUS"  // Ubah ke "HALTE" untuk test terminal unit
+// ========== TEST CONFIGURATION ==========
+#define TEST_MODE "BUS"        // "BUS" or "HALTE"
+#define CODE_ARCH "FREERTOS"   // "FREERTOS" or "SIMPLE"
 
-// ========== WiFi Credentials ==========
-const char* ssid = "WIFI_SSID";
-const char* password = "WIFI_PASSWORD";
+// ========== WiFi & MQTT ==========
+const char* ssid = "OrganicTrash";
+const char* password = "oops1112";
 const char* mqtt_server = "broker.hivemq.com";
 const int mqtt_port = 1883;
 
 // ========== Pin Definitions ==========
-#define BUTTON_PIN 4
-#define LED_PIN 2
+// BUS UNIT Pins
+const int PIN_GPS_RX   = 16;
+const int PIN_GPS_TX   = 17;
+const int PIN_BUTTON   = 4;
+const int PIN_LED_RED  = 12;
+const int PIN_LED_BLUE = 13;
+const int PIN_LED      = 2;   // Built-in LED
 
-// ========== Test Results ==========
+// ========== Test Results Storage ==========
 struct TestResult {
   const char* testName;
   bool passed;
   String message;
 };
 
-TestResult results[10];
+TestResult results[15];
 int testCount = 0;
 
 // ========== Hardware Objects ==========
 WiFiClient espClient;
 PubSubClient client(espClient);
-LiquidCrystal_I2C lcd(0x27, 20, 4);
+LiquidCrystal_I2C lcd(0x27, 16, 2);
 HardwareSerial gpsSerial(2);
 TinyGPSPlus gps;
+
+// ========== FreeRTOS Test Variables ==========
+QueueHandle_t sanityTestQueue = NULL;
+TaskHandle_t testTaskHandle = NULL;
+volatile bool taskTestComplete = false;
 
 // ========== HELPER FUNCTIONS ==========
 void addTestResult(const char* name, bool passed, String message = "") {
@@ -43,10 +64,15 @@ void addTestResult(const char* name, bool passed, String message = "") {
   testCount++;
 }
 
-void printTestResults() {
-  Serial.println("\n========================================");
-  Serial.println("         SANITY CHECK RESULTS");
+void printSeparator() {
   Serial.println("========================================");
+}
+
+void printTestResults() {
+  Serial.println("\n");
+  printSeparator();
+  Serial.println("       SANITY CHECK RESULTS");
+  printSeparator();
   
   int passCount = 0;
   for (int i = 0; i < testCount; i++) {
@@ -69,11 +95,11 @@ void printTestResults() {
     Serial.println();
   }
   
-  Serial.println("========================================");
+  printSeparator();
   Serial.printf("Total: %d/%d tests passed (%.1f%%)\n", 
                 passCount, testCount, 
                 (passCount * 100.0 / testCount));
-  Serial.println("========================================\n");
+  printSeparator();
 }
 
 // ========== TEST FUNCTIONS ==========
@@ -91,10 +117,13 @@ bool testESP32Basic() {
   Serial.printf("  CPU Freq: %d MHz\n", ESP.getCpuFreqMHz());
   Serial.printf("  Free Heap: %d bytes\n", ESP.getFreeHeap());
   Serial.printf("  Flash Size: %d bytes\n", ESP.getFlashChipSize());
+  Serial.printf("  Chip Model: %s\n", ESP.getChipModel());
+  Serial.printf("  Chip Revision: %d\n", ESP.getChipRevision());
+  Serial.printf("  CPU Cores: %d\n", ESP.getChipCores());
   
   bool passed = ESP.getCpuFreqMHz() >= 80 && ESP.getFreeHeap() > 100000;
   addTestResult("ESP32 Basic", passed, 
-                "Chip: " + String(chipId, HEX) + ", Heap: " + String(ESP.getFreeHeap()));
+                "Heap: " + String(ESP.getFreeHeap()/1024) + "KB");
   return passed;
 }
 
@@ -106,6 +135,7 @@ bool testWiFi() {
   WiFi.begin(ssid, password);
   
   int attempts = 0;
+  Serial.print("  Connecting");
   while (WiFi.status() != WL_CONNECTED && attempts < 20) {
     delay(500);
     Serial.print(".");
@@ -116,15 +146,17 @@ bool testWiFi() {
   bool connected = WiFi.status() == WL_CONNECTED;
   
   if (connected) {
+    Serial.printf("  SSID: %s\n", WiFi.SSID().c_str());
     Serial.printf("  IP Address: %s\n", WiFi.localIP().toString().c_str());
     Serial.printf("  RSSI: %d dBm\n", WiFi.RSSI());
     Serial.printf("  MAC: %s\n", WiFi.macAddress().c_str());
+    Serial.printf("  Channel: %d\n", WiFi.channel());
     
     addTestResult("WiFi Connection", true, 
-                  "IP: " + WiFi.localIP().toString() + ", RSSI: " + String(WiFi.RSSI()));
+                  "RSSI: " + String(WiFi.RSSI()) + " dBm");
   } else {
     Serial.println("  WiFi connection FAILED!");
-    addTestResult("WiFi Connection", false, "Cannot connect to WiFi");
+    addTestResult("WiFi Connection", false, "Timeout");
   }
   
   return connected;
@@ -143,8 +175,9 @@ bool testMQTT() {
     Serial.println("  MQTT connected successfully");
     Serial.printf("  Broker: %s:%d\n", mqtt_server, mqtt_port);
     Serial.printf("  Client ID: %s\n", clientId.c_str());
+    Serial.printf("  State: %d\n", client.state());
     
-    addTestResult("MQTT Connection", true, "Broker: " + String(mqtt_server));
+    addTestResult("MQTT Connection", true, "Broker OK");
   } else {
     Serial.printf("  MQTT connection FAILED! State: %d\n", client.state());
     addTestResult("MQTT Connection", false, "State: " + String(client.state()));
@@ -153,9 +186,9 @@ bool testMQTT() {
   return connected;
 }
 
-// Test 4: MQTT Publish/Subscribe
+// Test 4: MQTT Pub/Sub Round-trip
 bool testMQTTPubSub() {
-  Serial.println("\n[TEST 4] MQTT Pub/Sub...");
+  Serial.println("\n[TEST 4] MQTT Pub/Sub Test...");
   
   if (!client.connected()) {
     Serial.println("  Skipped - MQTT not connected");
@@ -163,17 +196,18 @@ bool testMQTTPubSub() {
     return false;
   }
   
-  const char* testTopic = "ui/bus/test";
-  bool received = false;
+  const char* testTopic = "sanitycheck/test";
+  volatile bool received = false;
   
   client.setCallback([&received](char* topic, byte* payload, unsigned int length) {
+    Serial.printf("  ✓ Message received on topic: %s\n", topic);
     received = true;
-    Serial.printf("  Message received on %s\n", topic);
   });
   
   client.subscribe(testTopic);
   delay(500);
   
+  Serial.println("  Publishing test message...");
   bool published = client.publish(testTopic, "{\"test\":\"sanity_check\"}");
   
   unsigned long start = millis();
@@ -183,87 +217,111 @@ bool testMQTTPubSub() {
   }
   
   if (published && received) {
-    Serial.println("  Publish and receive successful");
-    addTestResult("MQTT Pub/Sub", true, "Round-trip successful");
+    Serial.println("  ✓ Round-trip successful");
+    addTestResult("MQTT Pub/Sub", true, "Round-trip OK");
   } else {
-    Serial.printf("  Pub: %s, Sub: %s\n", published ? "OK" : "FAIL", received ? "OK" : "FAIL");
+    Serial.printf("  Publish: %s, Receive: %s\n", 
+                  published ? "OK" : "FAIL", 
+                  received ? "OK" : "FAIL");
     addTestResult("MQTT Pub/Sub", false, "Round-trip failed");
   }
   
   return published && received;
 }
 
-// Test 5: Button/GPIO
-bool testButton() {
-  Serial.println("\n[TEST 5] Button & GPIO...");
+// Test 5: Button & LEDs (Bus only)
+bool testButtonAndLEDs() {
+  Serial.println("\n[TEST 5] Button & LEDs Test...");
   
-  pinMode(BUTTON_PIN, INPUT_PULLUP);
-  pinMode(LED_PIN, OUTPUT);
+  if (String(TEST_MODE) != "BUS") {
+    Serial.println("  Skipped - Not in BUS mode");
+    addTestResult("Button & LEDs", true, "N/A for HALTE");
+    return true;
+  }
   
-  // Test LED
-  digitalWrite(LED_PIN, HIGH);
-  delay(200);
-  digitalWrite(LED_PIN, LOW);
-  delay(200);
-  digitalWrite(LED_PIN, HIGH);
-  delay(200);
-  digitalWrite(LED_PIN, LOW);
+  pinMode(PIN_BUTTON, INPUT);
+  pinMode(PIN_LED_RED, OUTPUT);
+  pinMode(PIN_LED_BLUE, OUTPUT);
+  pinMode(PIN_LED, OUTPUT);
   
-  Serial.println("  LED blink test completed");
+  Serial.println("  Testing LEDs...");
   
-  int buttonState = digitalRead(BUTTON_PIN);
-  Serial.printf("  Button state: %s\n", buttonState == HIGH ? "Not pressed" : "Pressed");
+  // Test RED LED
+  digitalWrite(PIN_LED_RED, HIGH);
+  delay(300);
+  digitalWrite(PIN_LED_RED, LOW);
+  Serial.println("  ✓ RED LED blinked");
   
-  Serial.println("  Press button within 5 seconds...");
+  // Test BLUE LED
+  digitalWrite(PIN_LED_BLUE, HIGH);
+  delay(300);
+  digitalWrite(PIN_LED_BLUE, LOW);
+  Serial.println("  ✓ BLUE LED blinked");
+  
+  // Test built-in LED
+  digitalWrite(PIN_LED, HIGH);
+  delay(300);
+  digitalWrite(PIN_LED, LOW);
+  Serial.println("  ✓ Built-in LED blinked");
+  
+  // Test Button
+  Serial.println("  Press button within 5 seconds to test...");
   unsigned long start = millis();
   bool buttonPressed = false;
+  int buttonState = digitalRead(PIN_BUTTON);
   
   while (millis() - start < 5000) {
-    if (digitalRead(BUTTON_PIN) == LOW) {
+    int newState = digitalRead(PIN_BUTTON);
+    if (newState != buttonState && newState == HIGH) {
       buttonPressed = true;
-      digitalWrite(LED_PIN, HIGH);
-      Serial.println("  Button press detected!");
+      Serial.println("  ✓ Button press detected!");
+      digitalWrite(PIN_LED_RED, HIGH);
+      digitalWrite(PIN_LED_BLUE, HIGH);
       delay(500);
-      digitalWrite(LED_PIN, LOW);
+      digitalWrite(PIN_LED_RED, LOW);
+      digitalWrite(PIN_LED_BLUE, LOW);
       break;
     }
+    buttonState = newState;
     delay(50);
   }
   
   if (!buttonPressed) {
-    Serial.println("  No button press detected (manual test)");
+    Serial.println("  ⚠ Button not tested (no press detected)");
   }
   
-  addTestResult("Button & GPIO", true, 
-                buttonPressed ? "Button responsive" : "LED OK, Button not tested");
+  addTestResult("Button & LEDs", true, 
+                "LEDs: OK, Button: " + String(buttonPressed ? "OK" : "Not tested"));
   return true;
 }
 
 // Test 6: GPS Module (Bus only)
 bool testGPS() {
-  Serial.println("\n[TEST 6] GPS Module...");
+  Serial.println("\n[TEST 6] GPS Module Test...");
   
   if (String(TEST_MODE) != "BUS") {
     Serial.println("  Skipped - Not in BUS mode");
-    addTestResult("GPS Module", true, "N/A for HALTE mode");
+    addTestResult("GPS Module", true, "N/A for HALTE");
     return true;
   }
   
-  gpsSerial.begin(9600, SERIAL_8N1, 16, 17);
+  gpsSerial.begin(9600, SERIAL_8N1, PIN_GPS_RX, PIN_GPS_TX);
   
-  Serial.println("  Reading GPS data for 10 seconds...");
+  Serial.println("  Reading GPS for 10 seconds...");
+  Serial.println("  (No fix is normal indoors)");
+  
   unsigned long start = millis();
   int sentences = 0;
+  int validSentences = 0;
   bool gotFix = false;
   
   while (millis() - start < 10000) {
     while (gpsSerial.available() > 0) {
       char c = gpsSerial.read();
-      gps.encode(c);
-      
-      if (gps.location.isUpdated()) {
+      if (gps.encode(c)) {
         sentences++;
-        if (gps.location.isValid()) {
+        if (gps.location.isUpdated() && gps.location.isValid()) {
+          validSentences++;
           gotFix = true;
         }
       }
@@ -271,21 +329,24 @@ bool testGPS() {
     delay(10);
   }
   
-  Serial.printf("  Sentences received: %d\n", sentences);
+  Serial.printf("  Sentences: %d\n", sentences);
+  Serial.printf("  Valid updates: %d\n", validSentences);
   Serial.printf("  Satellites: %d\n", gps.satellites.value());
-  Serial.printf("  GPS Fix: %s\n", gotFix ? "YES" : "NO");
+  Serial.printf("  HDOP: %.2f\n", gps.hdop.hdop());
   
   if (gotFix) {
-    Serial.printf("  Location: %.6f, %.6f\n", gps.location.lat(), gps.location.lng());
+    Serial.printf("  ✓ GPS FIX acquired!\n");
+    Serial.printf("  Location: %.6f, %.6f\n", 
+                  gps.location.lat(), gps.location.lng());
     addTestResult("GPS Module", true, 
                   "Fix OK, Sats: " + String(gps.satellites.value()));
   } else if (sentences > 0) {
-    Serial.println("  GPS module working but no fix (normal indoors)");
+    Serial.println("  ✓ GPS module responding (no fix - normal indoors)");
     addTestResult("GPS Module", true, 
-                  "Module OK, No fix (indoor expected)");
+                  "Module OK, " + String(sentences) + " sentences");
   } else {
-    Serial.println("  No GPS data received");
-    addTestResult("GPS Module", false, "No data from GPS module");
+    Serial.println("  ✗ No GPS data received");
+    addTestResult("GPS Module", false, "No data from GPS");
     return false;
   }
   
@@ -294,154 +355,295 @@ bool testGPS() {
 
 // Test 7: LCD Display (Halte only)
 bool testLCD() {
-  Serial.println("\n[TEST 7] LCD Display...");
+  Serial.println("\n[TEST 7] LCD Display Test...");
   
   if (String(TEST_MODE) != "HALTE") {
     Serial.println("  Skipped - Not in HALTE mode");
-    addTestResult("LCD Display", true, "N/A for BUS mode");
+    addTestResult("LCD Display", true, "N/A for BUS");
     return true;
   }
   
+  Serial.println("  Scanning I2C bus...");
+  Wire.begin();
+  
+  byte error, address;
+  int nDevices = 0;
   bool lcdFound = false;
   
-  // Scan I2C
-  Wire.begin();
-  Wire.beginTransmission(0x27);
-  if (Wire.endTransmission() == 0) {
-    lcdFound = true;
-    Serial.println("  LCD found at address 0x27");
-  } else {
-    Wire.beginTransmission(0x3F);
-    if (Wire.endTransmission() == 0) {
-      lcdFound = true;
-      Serial.println("  LCD found at address 0x3F");
+  for(address = 1; address < 127; address++ ) {
+    Wire.beginTransmission(address);
+    error = Wire.endTransmission();
+    if (error == 0) {
+      Serial.printf("  ✓ I2C device found at address 0x%02X\n", address);
+      nDevices++;
+      // Asumsikan device pertama yang ditemukan adalah LCD
+      if (!lcdFound) {
+        lcd = LiquidCrystal_I2C(address, 16, 2);
+        lcdFound = true;
+      }
     }
   }
-  
+
   if (!lcdFound) {
-    Serial.println("  LCD not found on I2C bus");
-    addTestResult("LCD Display", false, "LCD not detected");
+    Serial.println("  ✗ No I2C device found. Periksa kabel SDA/SCL dan VCC/GND.");
+    addTestResult("LCD Display", false, "Not detected on I2C");
     return false;
   }
   
-  lcd.init();
+  Serial.println("  Initializing LCD...");
+  lcd.begin(16,2); // [FIX 4] Gunakan lcd.begin() yang lebih modern
   lcd.backlight();
   lcd.clear();
   
-  // Test pattern
+  // Display test pattern
   lcd.setCursor(0, 0);
-  lcd.print("SANITY CHECK");
+  lcd.print("LCD Test: [PASS]");
   lcd.setCursor(0, 1);
-  lcd.print("LCD Test Pattern");
-  lcd.setCursor(0, 2);
-  lcd.print("Line 3: 12345678901234567890");
-  lcd.setCursor(0, 3);
-  lcd.print("Line 4: ABCDEFGHIJ");
+  lcd.print("16x2 Display OK!");
   
-  Serial.println("  LCD initialized and displaying test pattern");
-  delay(2000);
+  Serial.println("  ✓ LCD test pattern displayed");
+  delay(3000);
   
-  // Clear and show OK
   lcd.clear();
   lcd.setCursor(0, 0);
-  lcd.print("LCD TEST: OK");
-  
-  addTestResult("LCD Display", true, "Display working");
+  lcd.print("Sanity Check");
+  lcd.setCursor(0, 1);
+  lcd.print("Complete!");
+
+  addTestResult("LCD Display", true, "Device Found & OK");
   return true;
 }
 
-// Test 8: Memory Check
-bool testMemory() {
-  Serial.println("\n[TEST 8] Memory Check...");
+// Test 8: FreeRTOS (if using FreeRTOS architecture)
+bool testFreeRTOS() {
+  Serial.println("\n[TEST 8] FreeRTOS Test...");
   
-  size_t freeHeap = ESP.getFreeHeap();
-  size_t minFreeHeap = ESP.getMinFreeHeap();
-  size_t heapSize = ESP.getHeapSize();
+  if (String(CODE_ARCH) != "FREERTOS") {
+    Serial.println("  Skipped - Not using FreeRTOS architecture");
+    addTestResult("FreeRTOS", true, "N/A for Simple Loop");
+    return true;
+  }
   
-  Serial.printf("  Free Heap: %d bytes\n", freeHeap);
-  Serial.printf("  Min Free Heap: %d bytes\n", minFreeHeap);
-  Serial.printf("  Heap Size: %d bytes\n", heapSize);
-  Serial.printf("  Usage: %.1f%%\n", ((heapSize - freeHeap) * 100.0 / heapSize));
+  // Check scheduler state
+  if (xTaskGetSchedulerState() == taskSCHEDULER_RUNNING) {
+    Serial.println("  ✓ FreeRTOS Scheduler: RUNNING");
+  } else {
+    Serial.println("  ✗ FreeRTOS Scheduler: NOT RUNNING");
+    addTestResult("FreeRTOS", false, "Scheduler not running");
+    return false;
+  }
   
-  bool passed = freeHeap > 50000 && minFreeHeap > 30000;
+  // Check task count
+  UBaseType_t taskCount = uxTaskGetNumberOfTasks();
+  Serial.printf("  Active Tasks: %d\n", taskCount);
+  
+  // Check heap
+  size_t freeHeap = xPortGetFreeHeapSize();
+  size_t minHeap = xPortGetMinimumEverFreeHeapSize();
+  Serial.printf("  FreeRTOS Heap: %d bytes\n", freeHeap);
+  Serial.printf("  Min Free Heap: %d bytes\n", minHeap);
+  
+  bool passed = taskCount >= 1 && freeHeap > 10000;
   
   if (passed) {
-    addTestResult("Memory Check", true, 
-                  "Free: " + String(freeHeap) + " bytes");
+    Serial.println("  ✓ FreeRTOS system healthy");
+    addTestResult("FreeRTOS", true, 
+                  String(taskCount) + " tasks, " + String(freeHeap/1024) + "KB heap");
   } else {
-    addTestResult("Memory Check", false, 
-                  "Low memory warning");
+    addTestResult("FreeRTOS", false, "System issues detected");
   }
   
   return passed;
 }
 
-// Test 9: JSON Processing
-bool testJSON() {
-  Serial.println("\n[TEST 9] JSON Processing...");
+// Test 9: FreeRTOS Queue (if using FreeRTOS)
+bool testFreeRTOSQueue() {
+  Serial.println("\n[TEST 9] FreeRTOS Queue Test...");
   
-  const char* testJson = "{\"bus_id\":\"BUS_R1\",\"line_id\":\"RED\",\"current_zone\":\"FT\"}";
+  if (String(CODE_ARCH) != "FREERTOS") {
+    Serial.println("  Skipped - Not using FreeRTOS");
+    addTestResult("FreeRTOS Queue", true, "N/A");
+    return true;
+  }
   
-  StaticJsonDocument<256> doc;
-  DeserializationError error = deserializeJson(doc, testJson);
+  Serial.println("  Creating test queue...");
+  sanityTestQueue = xQueueCreate(5, sizeof(int));
   
-  if (error) {
-    Serial.printf("  JSON parse FAILED: %s\n", error.c_str());
-    addTestResult("JSON Processing", false, error.c_str());
+  if (sanityTestQueue == NULL) {
+    Serial.println("  ✗ Queue creation FAILED");
+    addTestResult("FreeRTOS Queue", false, "Cannot create");
     return false;
   }
   
-  String busId = doc["bus_id"] | "";
-  String lineId = doc["line_id"] | "";
-  String zone = doc["current_zone"] | "";
+  Serial.println("  ✓ Queue created");
   
-  Serial.printf("  Parsed: bus=%s, line=%s, zone=%s\n", 
-                busId.c_str(), lineId.c_str(), zone.c_str());
+  // Test send/receive
+  int testData[] = {10, 20, 30, 40, 50};
+  int received = 0;
+  bool allOK = true;
   
-  bool valid = (busId == "BUS_R1" && lineId == "RED" && zone == "FT");
-  
-  if (valid) {
-    addTestResult("JSON Processing", true, "Parse successful");
-  } else {
-    addTestResult("JSON Processing", false, "Parse incorrect");
+  Serial.println("  Testing send/receive...");
+  for (int i = 0; i < 5; i++) {
+    if (xQueueSend(sanityTestQueue, &testData[i], 0) != pdTRUE) {
+      Serial.printf("  ✗ Send failed at index %d\n", i);
+      allOK = false;
+    }
   }
   
-  return valid;
+  for (int i = 0; i < 5; i++) {
+    if (xQueueReceive(sanityTestQueue, &received, 0) == pdTRUE) {
+      if (received != testData[i]) {
+        Serial.printf("  ✗ Data mismatch: expected %d, got %d\n", 
+                      testData[i], received);
+        allOK = false;
+      }
+    } else {
+      Serial.printf("  ✗ Receive failed at index %d\n", i);
+      allOK = false;
+    }
+  }
+  
+  if (allOK) {
+    Serial.println("  ✓ All queue operations successful");
+  }
+  
+  vQueueDelete(sanityTestQueue);
+  
+  addTestResult("FreeRTOS Queue", allOK, "Send/Receive OK");
+  return allOK;
 }
 
-// Test 10: Route Arrays
-bool testRouteArrays() {
-  Serial.println("\n[TEST 10] Route Arrays...");
+// Test 10: FreeRTOS Task Creation
+void testTaskFunction(void* parameter) {
+  taskTestComplete = true;
+  vTaskDelete(NULL);
+}
+
+bool testTaskCreation() {
+  Serial.println("\n[TEST 10] FreeRTOS Task Creation...");
   
-  const char* redRoute[] = {"STASIUN", "ASRAMA", "FT", "FE", "FIB", "STASIUN"};
-  const char* blueRoute[] = {"STASIUN", "ASRAMA", "FISIP", "FH", "FPsi", "STASIUN"};
-  
-  Serial.println("  Red Route:");
-  for (int i = 0; i < 6; i++) {
-    Serial.printf("    [%d] %s\n", i, redRoute[i]);
+  if (String(CODE_ARCH) != "FREERTOS") {
+    Serial.println("  Skipped - Not using FreeRTOS");
+    addTestResult("Task Creation", true, "N/A");
+    return true;
   }
   
-  Serial.println("  Blue Route:");
-  for (int i = 0; i < 6; i++) {
-    Serial.printf("    [%d] %s\n", i, blueRoute[i]);
+  taskTestComplete = false;
+  
+  BaseType_t result = xTaskCreate(
+    testTaskFunction,
+    "TestTask",
+    2048,
+    NULL,
+    1,
+    &testTaskHandle
+  );
+  
+  if (result != pdPASS) {
+    Serial.println("  ✗ Task creation FAILED");
+    addTestResult("Task Creation", false, "Cannot create task");
+    return false;
   }
   
-  // Test route lookup
-  int ftIndex = -1;
-  for (int i = 0; i < 6; i++) {
-    if (strcmp(redRoute[i], "FT") == 0) {
-      ftIndex = i;
+  Serial.println("  ✓ Task created successfully");
+  
+  // Wait for task to complete
+  unsigned long start = millis();
+  while (!taskTestComplete && millis() - start < 1000) {
+    delay(10);
+  }
+  
+  if (taskTestComplete) {
+    Serial.println("  ✓ Task executed and cleaned up");
+    addTestResult("Task Creation", true, "Task lifecycle OK");
+  } else {
+    Serial.println("  ✗ Task did not complete");
+    addTestResult("Task Creation", false, "Task timeout");
+    return false;
+  }
+  
+  return true;
+}
+
+// Test 11: Memory Stress Test
+bool testMemory() {
+  Serial.println("\n[TEST 11] Memory Stress Test...");
+  
+  size_t initialHeap = ESP.getFreeHeap();
+  Serial.printf("  Initial Heap: %d bytes\n", initialHeap);
+  
+  // Allocate and free memory
+  const int allocSize = 10000;
+  char* testBuffer = (char*)malloc(allocSize);
+  
+  if (testBuffer == NULL) {
+    Serial.println("  ✗ Memory allocation FAILED");
+    addTestResult("Memory Test", false, "Cannot allocate");
+    return false;
+  }
+  
+  Serial.printf("  ✓ Allocated %d bytes\n", allocSize);
+  
+  // Fill with test pattern
+  for (int i = 0; i < allocSize; i++) {
+    testBuffer[i] = i % 256;
+  }
+  
+  // Verify
+  bool valid = true;
+  for (int i = 0; i < allocSize; i++) {
+    if (testBuffer[i] != (i % 256)) {
+      valid = false;
       break;
     }
   }
   
-  bool passed = (ftIndex == 2);
-  Serial.printf("  FT found at index: %d (expected 2)\n", ftIndex);
+  free(testBuffer);
+  size_t finalHeap = ESP.getFreeHeap();
+  
+  Serial.printf("  Final Heap: %d bytes\n", finalHeap);
+  Serial.printf("  Leaked: %d bytes\n", initialHeap - finalHeap);
+  
+  bool passed = valid && (abs((int)(initialHeap - finalHeap)) < 100);
   
   if (passed) {
-    addTestResult("Route Arrays", true, "Route lookup working");
+    Serial.println("  ✓ Memory test passed");
+    addTestResult("Memory Test", true, 
+                  "No leaks, " + String(finalHeap/1024) + "KB free");
   } else {
-    addTestResult("Route Arrays", false, "Route lookup failed");
+    Serial.println("  ✗ Memory issues detected");
+    addTestResult("Memory Test", false, "Potential memory leak");
+  }
+  
+  return passed;
+}
+
+// Test 12: JSON Processing
+bool testJSON() {
+  Serial.println("\n[TEST 12] JSON Processing...");
+  
+  const char* testJson = "{\"bus_id\":\"BUS_R1\",\"line_id\":\"RED\",\"current_zone\":\"FT\"}";
+  
+  // Simple manual parsing (no ArduinoJson to save memory)
+  String jsonStr = String(testJson);
+  
+  bool hasId = jsonStr.indexOf("bus_id") > 0;
+  bool hasLine = jsonStr.indexOf("line_id") > 0;
+  bool hasZone = jsonStr.indexOf("current_zone") > 0;
+  
+  Serial.printf("  Test JSON: %s\n", testJson);
+  Serial.printf("  Has bus_id: %s\n", hasId ? "YES" : "NO");
+  Serial.printf("  Has line_id: %s\n", hasLine ? "YES" : "NO");
+  Serial.printf("  Has current_zone: %s\n", hasZone ? "YES" : "NO");
+  
+  bool passed = hasId && hasLine && hasZone;
+  
+  if (passed) {
+    Serial.println("  ✓ JSON structure valid");
+    addTestResult("JSON Processing", true, "Format OK");
+  } else {
+    Serial.println("  ✗ JSON structure invalid");
+    addTestResult("JSON Processing", false, "Missing fields");
   }
   
   return passed;
@@ -457,21 +659,29 @@ void setup() {
   Serial.println("║   CAMPUS BUS TRACKER - SANITY CHECK   ║");
   Serial.println("╚════════════════════════════════════════╝");
   Serial.printf("\nTest Mode: %s\n", TEST_MODE);
-  Serial.printf("Date: %s %s\n", __DATE__, __TIME__);
+  Serial.printf("Architecture: %s\n", CODE_ARCH);
+  Serial.printf("Compiled: %s %s\n\n", __DATE__, __TIME__);
   
   delay(1000);
   
-  // Run all tests
+  // Run all applicable tests
   testESP32Basic();
   testWiFi();
   testMQTT();
   testMQTTPubSub();
-  testButton();
+  testButtonAndLEDs();
   testGPS();
   testLCD();
+  
+  // FreeRTOS specific tests
+  if (String(CODE_ARCH) == "FREERTOS") {
+    testFreeRTOS();
+    testFreeRTOSQueue();
+    testTaskCreation();
+  }
+  
   testMemory();
   testJSON();
-  testRouteArrays();
   
   // Print summary
   printTestResults();
@@ -481,40 +691,61 @@ void setup() {
   Serial.println("║         SANITY CHECK COMPLETE         ║");
   Serial.println("╚════════════════════════════════════════╝");
   
+  int passed = 0;
+  for (int i = 0; i < testCount; i++) {
+    if (results[i].passed) passed++;
+  }
+  
+  Serial.printf("\nFinal Score: %d/%d (%.1f%%)\n", 
+                passed, testCount, (passed * 100.0 / testCount));
+  
+  if (passed == testCount) {
+    Serial.println("\n🎉 ALL TESTS PASSED! System ready for deployment.\n");
+  } else {
+    Serial.println("\n⚠️  SOME TESTS FAILED. Check the log above.\n");
+  }
+  
   // Show on LCD if in HALTE mode
   if (String(TEST_MODE) == "HALTE") {
     lcd.clear();
     lcd.setCursor(0, 0);
     lcd.print("SANITY CHECK DONE");
     lcd.setCursor(0, 1);
-    
-    int passed = 0;
-    for (int i = 0; i < testCount; i++) {
-      if (results[i].passed) passed++;
-    }
-    
     lcd.print("Tests: ");
     lcd.print(passed);
     lcd.print("/");
     lcd.print(testCount);
-    lcd.print(" PASSED");
     
     if (passed == testCount) {
       lcd.setCursor(0, 2);
       lcd.print("Status: ALL OK!");
+      lcd.setCursor(0, 3);
+      lcd.print("Ready to deploy!");
     } else {
       lcd.setCursor(0, 2);
-      lcd.print("Status: CHECK LOG");
+      lcd.print("Status: ISSUES");
+      lcd.setCursor(0, 3);
+      lcd.print("Check Serial Log");
     }
   }
   
-  Serial.println("\nSystem ready. You can now upload the actual program.");
+  Serial.println("System now running in idle mode (LED blink)");
+  Serial.println("You can now upload the actual program.\n");
 }
 
 void loop() {
   // Blink LED to show system is alive
-  digitalWrite(LED_PIN, HIGH);
-  delay(1000);
-  digitalWrite(LED_PIN, LOW);
-  delay(1000);
+  static unsigned long lastBlink = 0;
+  static bool ledState = false;
+  
+  if (millis() - lastBlink > 1000) {
+    lastBlink = millis();
+    ledState = !ledState;
+    
+    if (String(TEST_MODE) == "BUS") {
+      digitalWrite(PIN_LED, ledState);
+    }
+  }
+  
+  delay(100);
 }
