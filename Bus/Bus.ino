@@ -46,7 +46,7 @@
 #define SIMULATION_MODE true // UBAH MENJADI 'false' SAAT GPS BARU TIBA
 
 // --- Identification (edit per bus) ---
-#define BUS_ID       "BUS_R1"   // e.g. "BUS_R1", "BUS_B1"
+#define BUS_ID       "BUS_1"   // e.g. "BUS_1", "BUS_2"
 #define DEFAULT_LINE "RED"      // "RED" or "BLUE" at startup
 
 // --- WiFi Hotspot ---
@@ -69,7 +69,7 @@ const int PIN_LED_BLUE = 26;  // BLUE line LED
 const uint32_t BUTTON_DEBOUNCE_MS  = 50;
 const uint32_t PUBLISH_INTERVAL_MS = 2000; // send MQTT every 1s
 
-const uint32_t SIMULATION_MOVE_INTERVAL_MS = 15000; // Bus "pindah" setiap 5 detik di mode simulasi
+const uint32_t SIMULATION_MOVE_INTERVAL_MS = 15000; // Bus "pindah" setiap 15 detik di mode simulasi
 
 Preferences preferences;
 

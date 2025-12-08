@@ -37,7 +37,6 @@
 // 🔧 CONFIGURATION (EDIT THESE)
 // ==========================
 #define MY_HALTE_ID   "FT"          // Which halte this device represents
-String MY_HALTE_TYPE  = "DEDICATED"; // "DEDICATED" or "SHARED"
 String RELEVANT_LINE  = "BLUE";       // "RED", "BLUE", or "BOTH"
 
 // WiFi hotspot credentials
@@ -47,7 +46,6 @@ const char* WIFI_PASS = "oops1112";
 // MQTT broker
 const char* MQTT_HOST = "broker.hivemq.com";
 const uint16_t MQTT_PORT = 1883;
-//const char* MQTT_TOPIC = "campusbus/location";
 const char* MQTT_TOPIC = "bikun/location"; // Sesuaikan dengan topik bus
 
 // ==========================

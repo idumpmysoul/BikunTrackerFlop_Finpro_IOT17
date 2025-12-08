@@ -73,7 +73,7 @@ Kecerdasan utama sistem berada di Unit Halte.
 3.  **Kalkulasi Status:** Dengan membandingkan indeks lokasi bus saat ini dengan indeks lokasinya sendiri di dalam array rute, unit dapat secara matematis menentukan apakah bus sedang mendekat, telah lewat, atau berada di halte. Informasi tambahan seperti "halte berikutnya" juga dihitung dari array ini.
 
 ### 2.3 Integrasi Sistem
-Integrasi antara semua perangkat dilakukan secara nirkabel melalui **broker MQTT publik**. Setiap unit terhubung ke jaringan Wi-Fi secara independen dan berkomunikasi melalui topik MQTT yang telah ditentukan (`/kampus/bus/lokasi`). Pendekatan ini memastikan bahwa penambahan unit baru (bus atau halte) tidak memerlukan perubahan pada unit yang sudah ada.
+Integrasi antara semua perangkat dilakukan secara nirkabel melalui **broker MQTT publik**. Setiap unit terhubung ke jaringan Wi-Fi secara independen dan berkomunikasi melalui topik MQTT yang telah ditentukan (`bikun/location`). Pendekatan ini memastikan bahwa penambahan unit baru (bus atau halte) tidak memerlukan perubahan pada unit yang sudah ada.
 
 ---
 
@@ -115,15 +115,6 @@ Serial Monitor (Bus 2) : ![Foto Serial Monitor Bus 2](https://imgur.com/GdQYlt3.
 - [4]“MQTT Version 3.1.1,” docs.oasis-open.org. https://docs.oasis-open.org/mqtt/mqtt/v3.1.1/os/mqtt-v3.1.1-os.html
 ‌
 
-
-## File yang Ada di Repository Ini
-
-| File | Perangkat | Fungsi |
-|------|-----------|--------|
-| `Bus_R1.ino` | Unit Bus | Mengirim lokasi Bus Merah via GPS + MQTT |
-| `Bus_B1.ino` | Unit Bus | Mengirim lokasi Bus Biru via GPS + MQTT |
-| `Halte_FT.ino` | Unit Halte | Menampilkan status kedatangan bus di Halte FT |
-
 ---
 
 ## Hal yang Perlu Disesuaikan Sebelum Upload
@@ -143,39 +134,34 @@ const char* WIFI_PASS = "PASSWORD_WIFI_KAMU";
 ```cpp
 const char* MQTT_HOST = "broker.hivemq.com";
 const uint16_t MQTT_PORT = 1883;
-const char* MQTT_TOPIC = "campusbus/location";
+const char* MQTT_TOPIC = "bikun/location";
 ```
 
 ---
 
 ### 3. Konfigurasi Unit Bus
 
-Di `Bus_R1.ino`:
+Di `Bus.ino`:
 
 ```cpp
-#define BUS_ID  "BUS_R1"
-#define LINE_ID "RED"
+#define BUS_ID  "BUS_1"
+#define DEFAULT_LINE "RED"
 ```
 
-Di `Bus_B1.ino`:
-
-```cpp
-#define BUS_ID  "BUS_B1"
-#define LINE_ID "BLUE"
-```
+BUS_ID dan DEFAULT_LINE dapat diubah sesuai dengan setup Bus yang diinginkan
 
 ---
 
 ### 4. Konfigurasi Lokasi Unit Halte
 
-Pada `Halte_FT.ino`:
+Pada `Halte.ino`:
 
 ```cpp
 #define MY_HALTE_ID "FT"
 String RELEVANT_LINE = "RED";
 ```
 
-Untuk memindahkan unit halte ke lokasi lain, gunakan tabel berikut:
+Untuk memindahkan unit halte ke lokasi lain, ubah MY_HALTE_ID dan RELEVANT_LINE dengan menggunakan tabel berikut:
 
 | Halte      | MY_HALTE_ID | RELEVANT_LINE |
 | ---------- | ----------- | ------------- |
@@ -213,13 +199,6 @@ Ubah > Upload > Selesai
 Berdasarkan lokasi bus terhadap halte tersebut
 
 ---
-
-## Tips Pengujian Cepat
-
-Tanpa perlu keluar ruangan:
-
-* Dekatkan Unit Bus ke Unit Halte > zona harus berubah
-* Atau **edit sementara GPS koordinat** di kode untuk simulasi
 
 ---
 
