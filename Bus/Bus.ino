@@ -67,14 +67,11 @@ const int PIN_LED_BLUE = 26;  // BLUE line LED
 
 // --- Timings ---
 const uint32_t BUTTON_DEBOUNCE_MS  = 50;
-const uint32_t PUBLISH_INTERVAL_MS = 2000;
+const uint32_t PUBLISH_INTERVAL_MS = 2000; // send MQTT every 1s
+
 const uint32_t SIMULATION_MOVE_INTERVAL_MS = 5000; // Bus "pindah" setiap 5 detik di mode simulasi
 
-// --- Button Debounce ---
-const uint32_t BUTTON_DEBOUNCE_MS = 50;
-
-// --- Publish Interval ---
-const uint32_t PUBLISH_INTERVAL_MS = 1000; // send MQTT every 1s
+Preferences preferences;
 
 // =========================
 // ====== GLOBALS ==========
@@ -90,7 +87,7 @@ PubSubClient mqttClient(wifiClient);
 QueueHandle_t gpsQueue;
 
 // Current bus line (changes when button toggled)
-volatile String currentLine = DEFAULT_LINE; // "RED" or "BLUE"
+String currentLine = DEFAULT_LINE; // "RED" or "BLUE"
 
 // Button state for debouncing
 int lastButtonReading = LOW;
@@ -194,11 +191,11 @@ const char* determineCurrentZone(double lat, double lon) {
   Zone* zones;
   int zoneCount;
 
-  if (currentLine == "RED") {
-    zones = redZones;
+  if (currentLine.equals("RED")) {
+    zones = (Zone*)redRoute;
     zoneCount = NUM_RED_ZONES;
   } else {
-    zones = blueZones;
+    zones = (Zone*)blueRoute;
     zoneCount = NUM_BLUE_ZONES;
   }
 
@@ -226,7 +223,7 @@ const char* determineCurrentZone(double lat, double lon) {
 }
 
 void updateLineLEDs() {
-  if (currentLine == "RED") {
+  if (currentLine.equals("RED")) {
     digitalWrite(PIN_LED_RED, HIGH);
     digitalWrite(PIN_LED_BLUE, LOW);
   } else { // "BLUE"
@@ -236,7 +233,7 @@ void updateLineLEDs() {
 }
 
 void toggleLine() {
-  if (currentLine == "RED") {
+  if (currentLine.equals("RED")) {
     currentLine = "BLUE";
   } else {
     currentLine = "RED";
@@ -319,7 +316,7 @@ void taskInput(void* parameter) {
     if (digitalRead(PIN_BUTTON) == HIGH) {
       if (millis() - lastPressTime > BUTTON_DEBOUNCE_MS) {
         lastPressTime = millis();
-        currentLine = (currentLine == "RED") ? "BLUE" : "RED";
+        currentLine = (currentLine.equals("RED")) ? "BLUE" : "RED";
         updateLineLEDs();
         preferences.begin("bus-state", false);
         preferences.putString("currentLine", currentLine);
