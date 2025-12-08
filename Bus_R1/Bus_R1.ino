@@ -36,18 +36,22 @@
 #include <WiFi.h>
 #include <PubSubClient.h>
 #include <TinyGPSPlus.h>
+#include <Preferences.h>
 
 // =========================
 // ==== CONFIGURATIONS ====
 // =========================
 
+// --- Mode Operasi ---
+#define SIMULATION_MODE true // UBAH MENJADI 'false' SAAT GPS BARU TIBA
+
 // --- Identification (edit per bus) ---
 #define BUS_ID       "BUS_R1"   // e.g. "BUS_R1", "BUS_B1"
 #define DEFAULT_LINE "RED"      // "RED" or "BLUE" at startup
 
-// --- WiFi Hotspot (PHONE 1) ---
-const char* WIFI_SSID     = "YOUR_HOTSPOT_SSID";
-const char* WIFI_PASSWORD = "YOUR_HOTSPOT_PASSWORD";
+// --- WiFi Hotspot ---
+const char* WIFI_SSID     = "OrganicTrash";
+const char* WIFI_PASSWORD = "oops1112";
 
 // --- MQTT Broker ---
 const char* MQTT_BROKER   = "broker.hivemq.com"; // or "test.mosquitto.org"
@@ -58,8 +62,13 @@ const char* MQTT_TOPIC    = "campusbus/location"; // all buses publish here
 const int PIN_GPS_RX   = 16;  // ESP32 RX2  <- GPS TX
 const int PIN_GPS_TX   = 17;  // ESP32 TX2  -> GPS RX (optional)
 const int PIN_BUTTON   = 4;   // Push button input
-const int PIN_LED_RED  = 12;  // RED line LED
-const int PIN_LED_BLUE = 13;  // BLUE line LED
+const int PIN_LED_RED  = 25;  // RED line LED
+const int PIN_LED_BLUE = 26;  // BLUE line LED
+
+// --- Timings ---
+const uint32_t BUTTON_DEBOUNCE_MS  = 50;
+const uint32_t PUBLISH_INTERVAL_MS = 2000;
+const uint32_t SIMULATION_MOVE_INTERVAL_MS = 5000; // Bus "pindah" setiap 5 detik di mode simulasi
 
 // --- Button Debounce ---
 const uint32_t BUTTON_DEBOUNCE_MS = 50;
@@ -81,7 +90,7 @@ PubSubClient mqttClient(wifiClient);
 QueueHandle_t gpsQueue;
 
 // Current bus line (changes when button toggled)
-String currentLine = DEFAULT_LINE; // "RED" or "BLUE"
+volatile String currentLine = DEFAULT_LINE; // "RED" or "BLUE"
 
 // Button state for debouncing
 int lastButtonReading = LOW;
@@ -90,9 +99,7 @@ uint32_t lastDebounceTime = 0;
 
 // Struct to pass via Queue
 typedef struct {
-  double latitude;
-  double longitude;
-  char zone[16];  // e.g. "FT", "ASRAMA", "STASIUN", or "UNKNOWN"
+  char zone[20];
 } GpsData_t;
 
 // =========================
@@ -105,27 +112,54 @@ struct Zone {
   double lon;
 };
 
-// RED Route stops
-Zone redZones[] = {
-  {"STASIUN", -6.361045, 106.831663},
-  {"ASRAMA",  -6.348348, 106.829673},
-  {"FT",      -6.361271, 106.823302},
-  {"FE",      -6.359542, 106.825729},
-  {"FIB",     -6.361129, 106.829465},
-  {"STASIUN", -6.361045, 106.831663} // loop back
-};
-const int NUM_RED_ZONES = sizeof(redZones) / sizeof(redZones[0]);
 
-// BLUE Route stops
-Zone blueZones[] = {
-  {"STASIUN", -6.361045, 106.831663},
-  {"ASRAMA",  -6.348348, 106.829673},
-  {"FISIP",   -6.361850, 106.830193},
-  {"FH",      -6.364871, 106.832133},
-  {"FPsi",    -6.362234, 106.830678},
-  {"STASIUN", -6.361045, 106.831663} // loop back
+// RED Route stops
+const Zone redRoute[] = {
+    {"ASRAMA", -6.348191, 106.829705},
+    {"MENWA", -6.353438, 106.831816},
+    {"STASIUN", -6.360717, 106.831752},
+    {"FH", -6.364840, 106.832226},
+    {"BALAIRUNG", -6.368286, 106.831712},
+    {"RIK", -6.370153, 106.831040},
+    {"FKM", -6.371713, 106.829113},
+    {"RSUI", -6.372728, 106.828575},
+    {"FIK", -6.371179, 106.826968},
+    {"FMIPA", -6.369845, 106.825761},
+    {"SOR", -6.367006, 106.824346},
+    {"VOKASI", -6.366118, 106.821655},
+    {"FT", -6.361060, 106.823179},
+    {"FEB", -6.359419, 106.825684},
+    {"FIB", -6.360619, 106.829290},
+    {"FISIP", -6.361711, 106.830344},
+    {"FPsi", -6.362391, 106.831005},
+    {"STASIUN", -6.360717, 106.831752},
+    {"MENWA", -6.353438, 106.831816},
+    {"ASRAMA", -6.348191, 106.829705}
 };
-const int NUM_BLUE_ZONES = sizeof(blueZones) / sizeof(blueZones[0]);
+const int NUM_RED_ZONES = sizeof(redRoute) / sizeof(redRoute[0]);
+
+const Zone blueRoute[] = {
+    {"ASRAMA", -6.348191, 106.829705},
+    {"MENWA", -6.353438, 106.831816},
+    {"STASIUN", -6.360778, 106.831417},
+    {"FPsi", -6.362880, 106.831129},
+    {"FISIP", -6.361868, 106.830092},
+    {"FIB", -6.360887, 106.829157},
+    {"FEB", -6.359658, 106.825722},
+    {"FT", -6.361258, 106.823307},
+    {"VOKASI", -6.366007, 106.821855},
+    {"PUSGIWA", -6.366744, 106.823464},
+    {"FARMASI", -6.368512, 106.827630},
+    {"BALAI SIDANG", -6.369061, 106.829390},
+    {"BALAIRUNG", -6.368136, 106.831576},
+    {"MASJID UI", -6.365565, 106.832023},
+    {"FH", -6.364443, 106.832040},
+    {"STASIUN", -6.360778, 106.831417},
+    {"MENWA", -6.353438, 106.831816},
+    {"ASRAMA", -6.348191, 106.829705}
+};
+const int NUM_BLUE_ZONES = sizeof(blueRoute) / sizeof(blueRoute[0]);
+
 
 const double EARTH_RADIUS_M = 6371000.0;
 const double ZONE_DETECT_THRESHOLD_M = 100.0; // 100m radius
@@ -278,47 +312,79 @@ void connectMQTT() {
   }
 }
 
+void taskInput(void* parameter) {
+  pinMode(PIN_BUTTON, INPUT);
+  uint32_t lastPressTime = 0;
+  for (;;) {
+    if (digitalRead(PIN_BUTTON) == HIGH) {
+      if (millis() - lastPressTime > BUTTON_DEBOUNCE_MS) {
+        lastPressTime = millis();
+        currentLine = (currentLine == "RED") ? "BLUE" : "RED";
+        updateLineLEDs();
+        preferences.begin("bus-state", false);
+        preferences.putString("currentLine", currentLine);
+        preferences.end();
+        Serial.printf("[INPUT] Jalur diubah menjadi: %s\n", currentLine.c_str());
+      }
+    }
+    vTaskDelay(pdMS_TO_TICKS(20));
+  }
+}
+
+
 // =========================
 // ====== GPS TASK =========
 // =========================
 
 void taskGPS(void* parameter) {
-  (void)parameter;
-
-  Serial.println("[GPS Task] Started.");
-
-  for (;;) {
-    // Read all available NMEA chars from GPS module
-    while (GPSSerial.available() > 0) {
-      char c = GPSSerial.read();
-      gps.encode(c);
-    }
-
-    if (gps.location.isUpdated() && gps.location.isValid()) {
+  #if SIMULATION_MODE
+    // --- MODE SIMULASI ---
+    Serial.println("[GPS Task] Dimulai dalam MODE SIMULASI.");
+    int currentIndex = 0;
+    for (;;) {
+      const Zone* zones;
+      int zoneCount;
+      if (currentLine == "RED") {
+        zones = redRoute;
+        zoneCount = NUM_RED_ZONES;
+      } else {
+        zones = blueRoute;
+        zoneCount = NUM_BLUE_ZONES;
+      }
+      
       GpsData_t data;
-      data.latitude  = gps.location.lat();
-      data.longitude = gps.location.lng();
-
-      const char* zone = determineCurrentZone(data.latitude, data.longitude);
-      strncpy(data.zone, zone, sizeof(data.zone));
+      strncpy(data.zone, zones[currentIndex].name, sizeof(data.zone) - 1);
       data.zone[sizeof(data.zone) - 1] = '\0';
-
-      // Put latest GPS data to Queue (overwrite if full)
-      if (gpsQueue != NULL) {
+      
+      xQueueOverwrite(gpsQueue, &data);
+      
+      Serial.printf("[SIMULATOR] Bus %s sekarang di -> %s\n", currentLine.c_str(), data.zone);
+      
+      currentIndex++;
+      if (currentIndex >= zoneCount) {
+        currentIndex = 0; // Kembali ke awal rute
+      }
+      
+      vTaskDelay(pdMS_TO_TICKS(SIMULATION_MOVE_INTERVAL_MS));
+    }
+  #else
+    // --- MODE GPS NYATA ---
+    GPSSerial.begin(9600, SERIAL_8N1, PIN_GPS_RX, PIN_GPS_TX);
+    Serial.println("[GPS Task] Dimulai dalam MODE GPS NYATA.");
+    for (;;) {
+      while (GPSSerial.available() > 0) {
+        gps.encode(GPSSerial.read());
+      }
+      if (gps.location.isUpdated() && gps.location.isValid()) {
+        GpsData_t data;
+        const char* zone = determineCurrentZone(gps.location.lat(), gps.location.lng());
+        strncpy(data.zone, zone, sizeof(data.zone) - 1);
+        data.zone[sizeof(data.zone) - 1] = '\0';
         xQueueOverwrite(gpsQueue, &data);
       }
-
-      // Debug
-      Serial.print("[GPS] Lat: ");
-      Serial.print(data.latitude, 6);
-      Serial.print(" Lon: ");
-      Serial.print(data.longitude, 6);
-      Serial.print(" Zone: ");
-      Serial.println(data.zone);
+      vTaskDelay(pdMS_TO_TICKS(200));
     }
-
-    vTaskDelay(pdMS_TO_TICKS(200)); // ~5Hz update
-  }
+  #endif
 }
 
 // =========================
