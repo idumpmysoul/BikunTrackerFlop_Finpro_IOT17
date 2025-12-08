@@ -56,7 +56,7 @@ const char* WIFI_PASSWORD = "oops1112";
 // --- MQTT Broker ---
 const char* MQTT_BROKER   = "broker.hivemq.com"; // or "test.mosquitto.org"
 const uint16_t MQTT_PORT  = 1883;
-const char* MQTT_TOPIC    = "campusbus/location"; // all buses publish here
+const char* MQTT_TOPIC    = "bikun/location"; // all buses publish here
 
 // --- GPIO Pins (BUS UNIT) ---
 const int PIN_GPS_RX   = 16;  // ESP32 RX2  <- GPS TX
